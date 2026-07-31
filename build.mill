@@ -1,0 +1,125 @@
+import mill.*
+import scalalib.*
+import publish.*
+
+// Consequences links against the Scala 3 compiler's internal API, which is not
+// binary-stable, so a separate artifact is published for each supported
+// compiler version. Adding a version means adding it here; if it needs a
+// different source set (the `StandardPlugin.initialize` signature changed in
+// 3.5, for example), add a `src/compat/scala-<version>` directory and it will
+// be picked up automatically.
+val scalaVersions = Seq("3.8.4", "3.9.0-RC4")
+
+// The test suite uses Probably, whose published artifacts carry experimental
+// TASTy (28.9-experimental-1, from a 3.9.0-RC1 build) that only a 3.9 compiler
+// can read. The plugin's logic is version-independent, so the suite is built
+// and run on this version alone; both cross-versions are still compiled.
+val testScalaVersion = "3.9.0-RC4"
+
+object settings:
+  // `-Yexplicit-nulls` is load-bearing: the sources use `.nn` throughout, and
+  // the compiler API they call returns nullable Java types.
+  val scalacOptions = Seq
+    ( "-experimental",
+      "-new-syntax",
+      "-feature",
+      "-deprecation",
+      "-Wunused:imports",
+      "-Yexplicit-nulls" )
+
+  // The language features the sources themselves are written in. These are
+  // also what the plugin's standalone parser must enable to parse code written
+  // in the same style; see `consequences.Parsing`.
+  val languageFeatures = Seq
+    ( "implicitConversions",
+      "experimental.modularity",
+      "experimental.dependent",
+      "experimental.relaxedLambdaSyntax",
+      "experimental.genericNumberLiterals",
+      "experimental.into",
+      "experimental.erasedDefinitions",
+      "experimental.saferExceptions",
+      "experimental.strictEqualityPatternMatching",
+      "experimental.subCases",
+      "experimental.multiSpreads" )
+
+  val allOptions = scalacOptions ++ languageFeatures.map("-language:"+_)
+
+  val organization = "style.consequent"
+  val website      = "https://consequent.style/"
+
+
+trait ConsequencesModule extends ScalaModule, SonatypeCentralPublishModule, Cross.Module[String]:
+  def scalaVersion = crossValue
+  def moduleDir    = super.moduleDir / os.up
+
+  def sources = Task.Sources(moduleDir / "src" / "plugin")
+  def resources = Task.Sources(moduleDir / "res" / "plugin")
+
+  override def scalacOptions = settings.allOptions
+
+  // `provided`: the compiler is present by definition wherever a compiler
+  // plugin runs, and must not be dragged onto a consumer's classpath.
+  def compileMvnDeps = Seq(mvn"org.scala-lang:scala3-compiler_3:${scalaVersion()}")
+
+  // A compiler plugin is tied to a full compiler version, not a binary
+  // version, so the artifact carries the whole version — the same convention
+  // Scala Native's `nscplugin` uses. Without this the cross-versions would
+  // publish to one coordinate and overwrite each other.
+  //
+  // `artifactName` is set explicitly because Mill would otherwise fold the
+  // cross value into it, giving `consequences-3.8.4_3.8.4`.
+  override def artifactName = Task("consequences")
+  override def artifactSuffix = Task("_"+scalaVersion())
+
+  def publishVersion = Task.Input:
+    // Read through `Task.env` rather than `sys.env`: the Mill daemon captures
+    // `sys.env` at startup, so a release run would otherwise publish whatever
+    // version the daemon was started with.
+    Task.env.get("CONSEQUENT_RELEASE_VERSION").filter(_.nonEmpty).getOrElse:
+      try os.proc("git", "describe", "--tags", "--always").call().out.text().trim
+      catch case _: Exception => "0.0.1-SNAPSHOT"
+
+  // Maven Central requires a `-javadoc.jar`, but the plugin has no public API
+  // worth documenting; an empty jar satisfies the requirement.
+  override def docJar = Task:
+    val jar = Task.dest / "empty.jar"
+    java.util.zip.ZipOutputStream(java.io.FileOutputStream(jar.toIO)).close()
+    PathRef(jar)
+
+  def pomSettings = PomSettings
+    ( description  = "A compiler plugin that checks Consequent Style",
+      organization = settings.organization,
+      url          = settings.website,
+      licenses     = Seq(License.`Apache-2.0`),
+      versionControl = VersionControl.github("propensive", "consequent"),
+      developers = Seq(Developer("propensive", "Jon Pretty", "https://github.com/propensive")) )
+
+
+object consequences extends Cross[ConsequencesModule](scalaVersions)
+
+
+// Probably reports results from a `main` method rather than through a test
+// framework, so this is an ordinary module run by `make test`, not a
+// `ScalaTests`. It is defined once, outside the cross, because the plugin's
+// logic does not vary by compiler version.
+object test extends ScalaModule:
+  def scalaVersion = testScalaVersion
+  def moduleDir = super.moduleDir / os.up
+  def sources = Task.Sources(moduleDir / "src" / "test")
+  def moduleDeps = Seq(consequences(testScalaVersion))
+
+  // Probably's coverage support pulls a forked `scala3-compiler_3` build
+  // transitively, whose TASTy this compiler cannot read; it is excluded so the
+  // pinned compiler below wins.
+  //
+  // Unlike the plugin, the tests need the compiler at *runtime* too — they
+  // drive `Parsing` directly — so it is an ordinary dependency here rather
+  // than a provided one.
+  def mvnDeps = Seq
+    ( mvn"dev.soundness:probably-cli:0.63.0"
+      . exclude("org.scala-lang" -> "scala3-compiler_3"),
+      mvn"org.scala-lang:scala3-compiler_3:$testScalaVersion" )
+
+  override def scalacOptions = settings.allOptions
+  override def mainClass = Some("consequences.Tests")
