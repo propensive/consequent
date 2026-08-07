@@ -7,8 +7,9 @@
 # Required secrets (read from the macOS keychain — see SECRETS below):
 #   - consequent.sonatype.username
 #   - consequent.sonatype.password
-#   - consequent.pgp.secret.base64
-#   - consequent.pgp.passphrase
+#
+# The signing key is not a secret this script handles: gpg-agent holds it and
+# prompts for the passphrase through pinentry. See SIGNING below.
 #
 # One release publishes every entry of the cross-build — one artifact per
 # supported compiler version — all at the same version number.
@@ -38,21 +39,63 @@ if git ls-remote --exit-code --tags origin "refs/tags/$VERSION" >/dev/null 2>&1;
   echo "release: tag $VERSION already exists on origin" >&2; exit 1
 fi
 
+# ---------------------------- SIGNING ----------------------------
+#
+# The signing key stays in gpg-agent; this script never sees it, and there is
+# no exported copy to leak. Mill is told to shell out to `gpg` (`--useGpgCli`)
+# rather than use its built-in BouncyCastle signer, which would need the key
+# and its passphrase as environment variables.
+#
+# Mill's default `gpgArgs` are:
+#
+#   --no-tty --pinentry-mode loopback --batch --yes --armor --detach-sign
+#
+# `--pinentry-mode loopback` bypasses the agent (it expects the passphrase on
+# the command line) and `--no-tty` stops pinentry drawing anywhere. Both are
+# dropped here so the agent stays in charge and can prompt.
+GPG_ARGS="--batch,--yes,--armor,--detach-sign"
+
+# pinentry needs to know which terminal to prompt on; without this, signing
+# fails with "Inappropriate ioctl for device". `updatestartuptty` then points a
+# gpg-agent that was started from some *other* terminal at this one — otherwise
+# it prompts on a terminal this script cannot see, and appears to hang.
+#
+# `tty -s` for the test, not `[[ -n $(tty) ]]`: `tty` prints "not a tty" on
+# stdout and signals through its exit status, so capturing its output always
+# yields a non-empty string.
+if tty -s; then
+  GPG_TTY=$(tty)
+  export GPG_TTY
+  gpg-connect-agent updatestartuptty /bye >/dev/null 2>&1 || true
+else
+  # Not fatal: a graphical pinentry needs no terminal, and a warm agent cache
+  # needs no prompt at all. The signing check below is the real gate.
+  echo "release: no controlling terminal; gpg can only sign if it need not prompt" >&2
+fi
+
+# Unlock the key *before* the build rather than after it: a mistyped passphrase
+# should cost seconds, not the whole compile-and-test cycle. This also warms the
+# agent's cache, so signing the artifacts later need not prompt again.
+echo "release: unlocking the signing key (gpg may prompt)"
+if ! printf 'release' \
+     | gpg --batch --yes --armor --detach-sign --output /dev/null 2>/dev/null; then
+  echo "release: gpg could not sign; check the key is present and the passphrase correct" >&2
+  exit 1
+fi
+
 echo "release: building and testing"
 ./mill __.compile
 ./mill test.run
 
 # ---------------------------- SECRETS ----------------------------
 #
-# Default: macOS keychain. Set the four entries once with:
+# Default: macOS keychain. Set the two entries once with:
 #   security add-generic-password -a consequent-release \
 #     -s consequent.sonatype.username -w 'YOUR_USERNAME'
 #   security add-generic-password -a consequent-release \
 #     -s consequent.sonatype.password -w 'YOUR_PASSWORD'
-#   security add-generic-password -a consequent-release \
-#     -s consequent.pgp.secret.base64 -w 'BASE64_PGP_SECRET'
-#   security add-generic-password -a consequent-release \
-#     -s consequent.pgp.passphrase    -w 'YOUR_PASSPHRASE'
+#
+# These are a Central *user token*, not portal login credentials.
 #
 # To use a different source, replace `read_secret` below.
 
@@ -64,12 +107,8 @@ read_secret() {
 
 export MILL_SONATYPE_USERNAME
 export MILL_SONATYPE_PASSWORD
-export MILL_PGP_SECRET_BASE64
-export MILL_PGP_PASSPHRASE
 MILL_SONATYPE_USERNAME=$(read_secret consequent.sonatype.username)
 MILL_SONATYPE_PASSWORD=$(read_secret consequent.sonatype.password)
-MILL_PGP_SECRET_BASE64=$(read_secret consequent.pgp.secret.base64)
-MILL_PGP_PASSPHRASE=$(read_secret consequent.pgp.passphrase)
 
 # ---------------------------- TAG ----------------------------
 #
@@ -95,6 +134,8 @@ done
 ./mill mill.javalib.SonatypeCentralPublishModule/publishAll \
   --publishArtifacts '__.publishArtifacts' \
   --shouldRelease true \
+  --useGpgCli true \
+  --gpgArgs "$GPG_ARGS" \
   --bundleName "dev.propensive-consequent:$VERSION"
 
 trap - ERR

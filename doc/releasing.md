@@ -20,21 +20,50 @@ which is only the project's website — containing the verification code Central
 issues. Until that is done, `make publishLocal` works but `make release` will
 be rejected at upload.
 
-Four secrets are read from the macOS keychain. Set them once:
+Two secrets are read from the macOS keychain — a Central *user token*, not
+portal login credentials. Set them once:
 
 ```sh
 security add-generic-password -a consequent-release \
-  -s consequent.sonatype.username -w 'USERNAME'
+  -s consequent.sonatype.username -w 'TOKEN_USERNAME'
 security add-generic-password -a consequent-release \
-  -s consequent.sonatype.password -w 'PASSWORD'
-security add-generic-password -a consequent-release \
-  -s consequent.pgp.secret.base64 -w 'BASE64_PGP_SECRET'
-security add-generic-password -a consequent-release \
-  -s consequent.pgp.passphrase    -w 'PASSPHRASE'
+  -s consequent.sonatype.password -w 'TOKEN_PASSWORD'
 ```
 
 To read them from somewhere else — 1Password's CLI, or a gitignored
 `.env.release` — replace the `read_secret` function in `etc/ci/release.sh`.
+
+## Signing
+
+The signing key is not one of those secrets. Mill can sign with its own
+BouncyCastle implementation, given the exported private key and its passphrase
+in `MILL_PGP_SECRET_BASE64` and `MILL_PGP_PASSPHRASE`, but that means an
+exported copy of the key and its passphrase both sitting in the environment of
+every process the build spawns. Instead `--useGpgCli` tells Mill to shell out
+to `gpg`, so the key never leaves `gpg-agent` and the passphrase is entered
+through pinentry.
+
+That requires overriding Mill's default `gpgArgs`, which are
+
+```
+--no-tty --pinentry-mode loopback --batch --yes --armor --detach-sign
+```
+
+`--pinentry-mode loopback` bypasses the agent — it expects the passphrase on
+the command line — and `--no-tty` prevents pinentry from drawing anywhere. The
+release passes `--batch,--yes,--armor,--detach-sign` instead.
+
+Two consequences for how the release is run:
+
+- **Run it from an interactive terminal.** The script exports `GPG_TTY` and
+  calls `gpg-connect-agent updatestartuptty /bye`, which re-points an agent
+  started from a different terminal at this one; without it a prompt appears on
+  a terminal you cannot see and the release looks like it has hung. Signing
+  without a terminal fails with `Inappropriate ioctl for device`.
+- **You are prompted once, early.** The script signs a throwaway payload before
+  compiling, so a mistyped passphrase costs seconds rather than the whole
+  build-and-test cycle, and the agent's cache then covers the artifact signing
+  that follows. If the cache expires mid-release, pinentry simply asks again.
 
 ## Releasing
 
