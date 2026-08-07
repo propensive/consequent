@@ -1,7 +1,7 @@
 # Consequent
 
 **Consequent Style** is a syntax and formatting standard for Scala 3, and
-**Consequences** is the compiler plugin that enforces it.
+**Consequent** is also the compiler plugin that enforces it.
 
 Most formatting standards describe an output: run the formatter, accept what it
 produces. Consequent Style instead states eight *principles* about how code is
@@ -33,21 +33,23 @@ derives from, then its number within that principle. Each has a page under
 
 ## Using the plugin
 
-Consequences is published for each supported Scala compiler version, because a
+Consequent is published for each supported Scala compiler version, because a
 compiler plugin links against compiler internals:
 
 ```
-style.consequent:consequences_3.8.4
-style.consequent:consequences_3.9.0-RC4
+dev.propensive:consequent_3.8.4
+dev.propensive:consequent_3.9.0-RC4
 ```
 
-Add it as a compiler plugin. With Mill:
+The suffix is the *full* compiler version, not the binary version — the
+`CrossVersion.full` convention every compiler plugin uses. Add it as a compiler
+plugin; with Mill, the triple colon selects that suffix:
 
 ```scala
-def scalacPluginMvnDeps = Seq(mvn"style.consequent:consequences_${scalaVersion()}:$version")
+def scalacPluginMvnDeps = Seq(mvn"dev.propensive:::consequent:$version")
 ```
 
-By default violations are reported as warnings; `-P:consequences:errors` makes
+By default violations are reported as warnings; `-P:consequent:errors` makes
 them errors.
 
 ### Options

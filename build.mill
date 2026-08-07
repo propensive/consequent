@@ -2,7 +2,7 @@ import mill.*
 import scalalib.*
 import publish.*
 
-// Consequences links against the Scala 3 compiler's internal API, which is not
+// Consequent links against the Scala 3 compiler's internal API, which is not
 // binary-stable, so a separate artifact is published for each supported
 // compiler version. Adding a version means adding it here; if it needs a
 // different source set (the `StandardPlugin.initialize` signature changed in
@@ -29,7 +29,7 @@ object settings:
 
   // The language features the sources themselves are written in. These are
   // also what the plugin's standalone parser must enable to parse code written
-  // in the same style; see `consequences.Parsing`.
+  // in the same style; see `consequent.Parsing`.
   val languageFeatures = Seq
     ( "implicitConversions",
       "experimental.modularity",
@@ -45,11 +45,11 @@ object settings:
 
   val allOptions = scalacOptions ++ languageFeatures.map("-language:"+_)
 
-  val organization = "style.consequent"
+  val organization = "dev.propensive"
   val website      = "https://consequent.style/"
 
 
-trait ConsequencesModule extends ScalaModule, SonatypeCentralPublishModule, Cross.Module[String]:
+trait ConsequentModule extends ScalaModule, SonatypeCentralPublishModule, Cross.Module[String]:
   def scalaVersion = crossValue
   def moduleDir    = super.moduleDir / os.up
 
@@ -68,8 +68,8 @@ trait ConsequencesModule extends ScalaModule, SonatypeCentralPublishModule, Cros
   // publish to one coordinate and overwrite each other.
   //
   // `artifactName` is set explicitly because Mill would otherwise fold the
-  // cross value into it, giving `consequences-3.8.4_3.8.4`.
-  override def artifactName = Task("consequences")
+  // cross value into it, giving `consequent-3.8.4_3.8.4`.
+  override def artifactName = Task("consequent")
   override def artifactSuffix = Task("_"+scalaVersion())
 
   def publishVersion = Task.Input:
@@ -96,7 +96,7 @@ trait ConsequencesModule extends ScalaModule, SonatypeCentralPublishModule, Cros
       developers = Seq(Developer("propensive", "Jon Pretty", "https://github.com/propensive")) )
 
 
-object consequences extends Cross[ConsequencesModule](scalaVersions)
+object consequent extends Cross[ConsequentModule](scalaVersions)
 
 
 // Probably reports results from a `main` method rather than through a test
@@ -107,7 +107,7 @@ object test extends ScalaModule:
   def scalaVersion = testScalaVersion
   def moduleDir = super.moduleDir / os.up
   def sources = Task.Sources(moduleDir / "src" / "test")
-  def moduleDeps = Seq(consequences(testScalaVersion))
+  def moduleDeps = Seq(consequent(testScalaVersion))
 
   // Probably's coverage support pulls a forked `scala3-compiler_3` build
   // transitively, whose TASTy this compiler cannot read; it is excluded so the
@@ -122,4 +122,4 @@ object test extends ScalaModule:
       mvn"org.scala-lang:scala3-compiler_3:$testScalaVersion" )
 
   override def scalacOptions = settings.allOptions
-  override def mainClass = Some("consequences.Tests")
+  override def mainClass = Some("consequent.Tests")

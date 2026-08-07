@@ -83,7 +83,7 @@ trap 'git tag -d "$VERSION" >/dev/null 2>&1 || true' ERR
 # a long-running daemon would otherwise publish a stale version.
 export CONSEQUENT_RELEASE_VERSION="$VERSION"
 
-for module in $(./mill resolve 'consequences[_]'); do
+for module in $(./mill resolve 'consequent[_]'); do
   actual=$(./mill show "$module.publishVersion" | tr -d '"')
   if [[ "$actual" != "$VERSION" ]]; then
     echo "release: $module reports version '$actual', expected '$VERSION'" >&2; exit 1
@@ -95,7 +95,7 @@ done
 ./mill mill.javalib.SonatypeCentralPublishModule/publishAll \
   --publishArtifacts '__.publishArtifacts' \
   --shouldRelease true \
-  --bundleName "style.consequent-consequences:$VERSION"
+  --bundleName "dev.propensive-consequent:$VERSION"
 
 trap - ERR
 git push origin "refs/tags/$VERSION"

@@ -1,7 +1,7 @@
 # Consequent Style
 
 This document defines the syntactic and whitespace conventions enforced by
-the Consequences compiler plugin. It is written to govern any project that adopts
+the Consequent compiler plugin. It is written to govern any project that adopts
 it; a project fixes two parameters — the exact text of its licence header
 (and hence the header's length in lines) and, optionally, the name of its
 umbrella re-export package — and every other convention applies unchanged.
@@ -1270,7 +1270,7 @@ files, and source files carry only code and `//` comments.
 
 ## Part III — Rule Index
 
-Every rule enforced by the Consequences checker, its section in Part II, and
+Every rule enforced by the Consequent checker, its section in Part II, and
 the principle it derives from. Sub-rules (`A2.1`, `A9.3`) are documented with their family.
 
 | Rule | Part II section | Principle |
@@ -1448,7 +1448,7 @@ A project declares its whitespace-insignificant interpolators to the checker
 by prefix, so the checker knows which literals it may govern:
 
 ```
--P:consequences:interpolators=m,j,x,y
+-P:consequent:interpolators=m,j,x,y
 ```
 
 ## Appendix D — Where to put an extension so it resolves

@@ -4,8 +4,8 @@ A release publishes one artifact per supported compiler version, all at the
 same version number:
 
 ```
-style.consequent:consequences_3.8.4:X.Y.Z
-style.consequent:consequences_3.9.0-RC4:X.Y.Z
+dev.propensive:consequent_3.8.4:X.Y.Z
+dev.propensive:consequent_3.9.0-RC4:X.Y.Z
 ```
 
 Publishing runs locally rather than in CI, so the signing key never leaves the
@@ -13,11 +13,12 @@ release machine.
 
 ## Prerequisites
 
-**The `style.consequent` namespace must be verified with Sonatype Central**
+**The `dev.propensive` namespace must be verified with Sonatype Central**
 before the first release. Central verifies ownership of the reversed domain,
-so this needs a DNS TXT record on `consequent.style` containing the
-verification code Central issues. Until that is done, `make publishLocal`
-works but `make release` will be rejected at upload.
+so this needs a DNS TXT record on `propensive.dev` — not on `consequent.style`,
+which is only the project's website — containing the verification code Central
+issues. Until that is done, `make publishLocal` works but `make release` will
+be rejected at upload.
 
 Four secrets are read from the macOS keychain. Set them once:
 
