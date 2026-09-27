@@ -34,7 +34,7 @@ package flair
 
 import soundness.*
 
-import charEncoders.utf8Encoder
+import codepages.utf8Codepage
 
 // Where `flair assess` keeps its records (see `Verdicts` for what they are): a judgement note on
 // each definition's blob, an assessment note on the input tree, and a text-TEL pointer on the

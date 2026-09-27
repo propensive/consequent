@@ -148,18 +148,14 @@ object Candidates:
 
   private def capitalised(name: String): Boolean = name.headOption.exists(_.isUpper)
 
-  // A case body that names a constructor, or wraps its bindings in one.
+  // A case body that names a constructor, or applies one: `Frame.Z`, `TextNode(text)`,
+  // `Frame.L(t"?")`. What the constructor is applied to does not matter; that it is a
+  // constructor, and not a computation, does.
   private def constant(body: untpd.Tree): Boolean = unwrap(body) match
     case untpd.Ident(name)     => capitalised(name.toString)
     case untpd.Select(_, name) => capitalised(name.toString)
-
-    case untpd.Apply(fun, args) =>
-      typeName(fun).exists(capitalised) && args.forall:
-        case _: untpd.Ident | _: untpd.Literal | _: untpd.Select => true
-        case _                                                   => false
-
-    case _ =>
-      false
+    case untpd.Apply(fun, _)   => typeName(fun).exists(capitalised)
+    case _                     => false
 
   private def ladder(rhs: untpd.Tree, minimum: Int): Boolean = unwrap(rhs) match
     case untpd.Match(_, cases) =>

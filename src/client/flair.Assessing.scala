@@ -36,7 +36,7 @@ import scala.collection.immutable as sci
 
 import soundness.*
 import alphabets.hexLowerCase
-import charEncoders.utf8Encoder
+import codepages.utf8Codepage
 import dysasymptotics.linearSize
 import providers.javaBaseProvider
 

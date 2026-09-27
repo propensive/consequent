@@ -34,7 +34,7 @@ package flair
 
 import soundness.*
 
-import charEncoders.utf8Encoder
+import codepages.utf8Codepage
 import logging.silentLogging
 import gitCommands.searchpathGitCommand
 
