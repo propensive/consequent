@@ -36,6 +36,11 @@ import probably.*
 import fulminate.*
 
 object Tests extends Suite(m"Flair Tests"):
+  // The entry point fume's legacy run (a separate JVM, used when the suites' event schema is
+  // not the one fume was built against) and `java -cp <test jar> flair.Tests` both need: the
+  // same plain runner as `flair.runTests`, exiting with the suite's status.
+  def main(args: Array[String]): Unit = runTests()
+
   // The language features the standalone parser must enable, matching the
   // `-language` flags this module is compiled with. Without them the parse
   // differs from the compiler's — `relaxedLambdaSyntax` alone decides whether
