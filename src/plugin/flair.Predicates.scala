@@ -320,7 +320,7 @@ object Predicates:
     !defn.mods.is(Flags.Param) && !defn.mods.is(Flags.ParamAccessor)
       && !defn.name.toString.startsWith("<") && !defn.name.toString.isEmpty
 
-  private def glob(target: String): scala.util.matching.Regex =
+  private[flair] def glob(target: String): scala.util.matching.Regex =
     target.split("\\*", -1).nn.map(part => java.util.regex.Pattern.quote(part).nn).mkString(".*").r
 
   // The `case` clauses of a `catch`, whichever shape the tree is in. The

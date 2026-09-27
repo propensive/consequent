@@ -237,6 +237,28 @@ class Repository(val toplevel: Text, val gitDir: Text):
   def appendNote(namespace: Text, hash: Text, body: Text)(using WorkingDirectory): Boolean =
     safely(repo.notes.append(Git.Hash(hash), body, ref(namespace))).present
 
+  // Writes `data` into the object store as a blob and returns its hash: how a definition's
+  // normalised text becomes its digest, and how a binary note body is staged.
+  def writeBlob(data: Data)(using WorkingDirectory): Optional[Text] =
+    safely:
+      val job = sh"git -C $toplevel hash-object -w --stdin".fork[Text]()
+      job.stdin(Stream(data))
+      val hash: Text = job.await().trim
+      if hash.length == 40 then hash else Unset
+
+  def writeBlob(text: Text)(using WorkingDirectory): Optional[Text] = writeBlob(text.bytestream)
+
+  // A note whose body is a blob already in the store: git's `-C` reuses the object, so a
+  // binary body (BinTEL) is never passed through a command line or a text message.
+  def addBinaryNote(namespace: Text, target: Text, data: Data)(using WorkingDirectory): Boolean =
+    writeBlob(data).lay(false): (blob: Text) =>
+      safely(sh"git -C $toplevel notes --ref $namespace add -f -C $blob $target".exec[Exit]())
+      . lay(false)(_ == Exit.Ok)
+
+  // A note's body as bytes, for a binary note.
+  def noteData(namespace: Text, hash: Text)(using WorkingDirectory): Optional[Data] =
+    safely(sh"git -C $toplevel notes --ref $namespace show $hash".exec[Data]())
+
 object Repository:
   case class Entry(hash: Text, time: Long)
 
