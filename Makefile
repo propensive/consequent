@@ -29,7 +29,7 @@ release:
 # NOT externalize a locally-published copy unless its bytes match a release asset). This is also
 # how a Soundness checkout picks up a local build of the plugin.
 publishLocal:
-	./mill flair.plugin.publishLocal + flair.client.publishLocal
+	./mill flair.plugin.publishLocal + flair.records.publishLocal + flair.client.publishLocal
 
 # Repackage the launcher assembly into a self-fetching launcher with Burdock. The
 # `burdock.externalize` macro wrapping `flair.flair` (in src/launcher/flair_launcher.scala) has

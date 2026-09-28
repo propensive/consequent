@@ -59,6 +59,9 @@ object ConfigError extends Status(4, t"the configuration file could not be used"
 object ParseFailure extends Status(5, t"a source file could not be parsed")
 object NoRepository extends Status(6, t"the project is not in a git repository")
 object NotesFailed extends Status(7, t"the git notes could not be written or read")
+object NoCredential extends Status(8, t"no credential for the model could be found")
+object ModelFailed extends Status(9, t"the model could not be consulted")
+object AssessIncomplete extends Status(10, t"some candidates were not judged")
 
 // Flair's user interface, in one namespace: its subcommands and flags. The object exists so each
 // can carry its natural name without a package-level `val` shadowing a Soundness export of the
@@ -69,11 +72,14 @@ object ui:
   val Options = Subcommand("options", "print the -P:flair: options equivalent to a profile, for the compiler plugin")
   val Rules   = Subcommand("rules", "list the rules a profile checks")
   val Serve   = Subcommand("serve", "serve the dashboard on the web until Ctrl+C")
+  val Assess  = Subcommand("assess", "have a model judge a profile's candidate definitions against an assessment rule, and record the verdicts in git notes")
 
   val Terse  = Flag[Unit]("terse", false, List('t'), "one plain line per finding, for logs and CI")
   val Force  = Flag[Unit]("force", false, List('f'), "overwrite an existing note")
   val DryRun = Flag[Unit]("dry-run", false, List('n'), "print the census without writing any note")
   val Show   = Flag[Text]("show", false, List('s'), "print the census recorded for a commit or input tree")
+  val Limit  = Flag[Text]("limit", false, List('l'), "judge at most this many candidates, the likeliest first")
+  val Report = Flag[Unit]("report", false, List('r'), "add per-criterion counts and band totals to the ranking")
 
   // The port `flair serve` listens on; `--port`, the `flair.port` property, `FLAIR_PORT` and
   // `port` in either config file all reach it — and `Tool` reads the same keyword for the
@@ -125,7 +131,8 @@ private def words(arguments: List[Argument]): List[Text] =
   def recur(rest: List[Argument], acc: List[Text]): List[Text] = rest match
     case head :: tail =>
       val text = head()
-      if text == t"--show" || text == t"-s" then recur(tail match { case _ :: rest => rest; case _ => tail }, acc)
+      if text == t"--show" || text == t"-s" || text == t"--limit" || text == t"-l"
+      then recur(tail match { case _ :: rest => rest; case _ => tail }, acc)
       else if text.starts(t"-") then recur(tail, acc)
       else recur(tail, acc + List(text))
     case _ => acc
@@ -165,7 +172,7 @@ def runClient(): Unit =
         case _                                => ()
 
       // Whether the client is a terminal, which is what decides whether a run shows its progress.
-      val tty: Boolean = summon[DaemonService[?]].cliInput == ethereal.Stdin.Terminal
+      val tty: Boolean = summon[DaemonService[?]].cliInput == ethereal.Terminus.Terminal
 
       arguments match
         // `flair serve [--port]` — serve the dashboard: every known project's profiles, a
@@ -181,7 +188,7 @@ def runClient(): Unit =
             val aborted: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false)
 
             trap:
-              case Interrupt.Int =>
+              case Signal(Interrupt.Int, _, _, _) =>
                 aborted.set(true)
                 SignalResponse.Accept
 
@@ -214,6 +221,14 @@ def runClient(): Unit =
           val dryRun = ui.DryRun().present
           val show   = ui.Show().value
           execute(ambient(metrics(workspace, words(rest), force, dryRun, show, tty)))
+
+        case ui.Assess() :: rest =>
+          val force  = ui.Force().present
+          val dryRun = ui.DryRun().present
+          val show   = ui.Show().value
+          val limit  = ui.Limit().value
+          val report = ui.Report().present
+          execute(ambient(assess(workspace, directory, words(rest), force, dryRun, show, limit, report)))
 
         case ui.Check() :: rest =>
           val terse = ui.Terse().present
@@ -496,3 +511,139 @@ private def measure
         case _ =>
           Out.println(t"flair: the input tree could not be written; is `git` on the PATH?")
           NotesFailed
+
+// `flair assess [<rule>…] [<profile>]`: the rules named, or every rule the profile lists under
+// `assess`; each run in turn, its ranking printed worst first and recorded in git notes.
+private def assess
+   ( workspace: Workspace.Outcome, directory: Text, words: List[Text], force: Boolean,
+     dryRun: Boolean, show: Optional[Text], limit: Optional[Text], report: Boolean )
+   (using Stdio, Console, Environment, WorkingDirectory)
+:   Exit | UsageError.type | NoConfig.type | ConfigError.type | ParseFailure.type
+      | NoRepository.type | NotesFailed.type | NoCredential.type | ModelFailed.type
+      | AssessIncomplete.type =
+  loaded(workspace) match
+    case NoConfig => NoConfig
+    case ConfigError => ConfigError
+    case config: Workspace.Config =>
+      val named: List[Text] = words.filter { (w: Text) => config.assessment(w).present }
+      val others: List[Text] = words.filter { (w: Text) => config.assessment(w).absent }
+
+      select(config, others) match
+        case (_, _, message: Text) =>
+          Out.println(t"flair: $message")
+          UsageError
+
+        case (profile: Workspace.Profile, _, _) =>
+          val chosen: List[Text] = if named.nil then profile.assessed else named
+
+          val rules: List[Workspace.Assessment] =
+            chosen.bind[List[Workspace.Assessment], Workspace.Assessment, List[Workspace.Assessment]]:
+              (name: Text) => config.assessment(name).lay(Nil: List[Workspace.Assessment])(List(_))
+
+          if rules.nil then
+            Out.println(t"flair: profile `${profile.name}` assesses nothing; name a rule, or add `assess <rule>` to the profile")
+            UsageError
+          else
+            Repository.locate(config.root) match
+              case repository: Repository =>
+                val statuses: List[Exit | ConfigError.type | ParseFailure.type | NotesFailed.type | NoCredential.type | ModelFailed.type | AssessIncomplete.type] =
+                  rules.map: (rule: Workspace.Assessment) =>
+                    show match
+                      case target: Text => showAssessment(repository, rule, target)
+                      case _            => assessOne(config, profile, rule, repository, directory, force, dryRun, limit, report)
+
+                statuses.filter(_ != Exit.Ok).prim.or(Exit.Ok)
+
+              case _ =>
+                Out.println(t"flair: ${config.root} is not inside a git repository, so nothing can be recorded")
+                NoRepository
+
+        case _ => UsageError
+
+private def showAssessment(repository: Repository, rule: Workspace.Assessment, target: Text)
+   (using Stdio, WorkingDirectory)
+:   Exit | NotesFailed.type =
+  repository.resolve(target) match
+    case hash: Text =>
+      val tree: Optional[Text] =
+        if repository.objectType(hash) == t"commit" then Recording.treeFor(repository, rule.name, hash)
+        else hash
+
+      tree.let(Recording.assessment(repository, rule.name, _)) match
+        case assessment: Verdicts.Assessment =>
+          Out.println(Assessing.heading(assessment))
+          assessment.ranked.each { (r: Verdicts.Ranked) => Out.println(Assessing.line(r)) }
+          Exit.Ok
+
+        case _ =>
+          Out.println(t"flair: no assessment for rule `${rule.name}` is recorded for `$target` under refs/notes/${Recording.namespace(rule.name)}")
+          NotesFailed
+
+    case _ =>
+      Out.println(t"flair: `$target` is not a commit or tree in this repository")
+      NotesFailed
+
+private def assessOne
+   ( config: Workspace.Config, profile: Workspace.Profile, rule: Workspace.Assessment,
+     repository: Repository, directory: Text, force: Boolean, dryRun: Boolean,
+     limit: Optional[Text], report: Boolean )
+   (using Stdio, Environment, WorkingDirectory)
+:   Exit | ConfigError.type | ParseFailure.type | NotesFailed.type | NoCredential.type
+      | ModelFailed.type | AssessIncomplete.type =
+  config.model(rule.model) match
+    case model: Workspace.Model =>
+      Rubric.load(config.root, rule.rubric) match
+        case rubric: Rubric =>
+          // A dry run consults no model, so it needs no credential.
+          val key: Optional[Text] = if dryRun then t"" else Flair.credential(model.credential, directory)
+
+          key match
+            case key: Text =>
+              val files = safely(Sources.expand(config.root, profile, Nil)).or(Nil)
+              val criteria: List[Text] = rule.criteria.map(_.id)
+
+              val oracle: (Text -> Text) => Oracle.Oracle =
+                (digests: Text -> Text) => Oracle.Anthropic(model, key, rubric, criteria, digests, 30)
+
+              val outcome =
+                Assessing.run
+                  ( config, profile, rule, model, rubric, repository, files, oracle,
+                    limit.let { (n: Text) => safely(n.as[Int]) }, force, dryRun,
+                    (message: Text) => Out.println(t"flair: $message") )
+
+              if !outcome.parseErrors.nil then
+                outcome.parseErrors.each: (d: flair.Frontend.Diagnostic) =>
+                  Out.println(t"${d.path}:${d.line}:${d.column}: error: ${d.message}")
+                Out.println(t"flair: a source did not parse, so nothing was recorded")
+                ParseFailure
+              else
+                if dryRun && outcome.scored.nil then
+                  outcome.candidates.each { (candidate, digest) => Out.println(Assessing.line(candidate, digest)) }
+
+                outcome.scored.each { (s: Assessing.Scored) => Out.println(Assessing.line(s)) }
+
+                if report then
+                  Assessing.bandLines(outcome.assessment).each(Out.println(_))
+                  Assessing.criterionLines(rule, outcome.scored).each(Out.println(_))
+
+                Out.println(Assessing.summary(rule, outcome, rubric))
+
+                outcome.recorded match
+                  case false =>
+                    Out.println(t"flair: the git notes could not be written")
+                    NotesFailed
+
+                  case _ =>
+                    if !dryRun && outcome.unjudged > 0 then AssessIncomplete else Exit.Ok
+
+            case _ =>
+              Out.println(t"flair: no credential `${model.credential}` could be found; declare it in ~/.config/pyrocosm/credentials.tel or set the conventional environment variable")
+              NoCredential
+
+        case _ =>
+          Out.println(t"flair: the rubric `${rule.rubric}` for rule `${rule.name}` could not be read")
+          ConfigError
+
+    case _ =>
+      Out.println(t"flair: rule `${rule.name}` names model `${rule.model}`, which is not defined")
+      ConfigError

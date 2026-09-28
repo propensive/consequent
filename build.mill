@@ -167,7 +167,17 @@ object settings:
     "contingency-core",
     "gossamer-core",
     "burdock-core",              // externalize + the repackager
-    "burdock-boot")              // the Bootstrap class the repackager force-includes
+    "burdock-boot",              // the Bootstrap class the repackager force-includes
+    "sibylline-core",            // the model: `flair assess` asks Anthropic through it
+    "gastronomy-core",           // the rubric's digest
+    "monotonous-core")           // the digest as hex
+  . map(component(soundness))
+
+  def recordsDeps(soundness: String) = Seq(
+    "stratiform-core",           // TEL and BinTEL: the record codecs
+    "contingency-core",
+    "gossamer-core",
+    "vacuous-core")
   . map(component(soundness))
 
   def pyrocosmDeps(pyrocosm: String) = Seq(
@@ -433,12 +443,24 @@ object flair extends Project:
     def compileMvnDeps = Seq(mvn"org.scala-lang:scala3-compiler_3:${settings.scalaVersion}")
     def resources = Task.Sources(mill.api.BuildCtx.workspaceRoot / "res" / "plugin")
 
+  // The records `flair assess` stores in git notes, with their BinTEL codecs, released as
+  // `dev.propensive:flair-records`. Compiled WITHOUT capture checking, as Pyrocosm's `remote`
+  // is: stratiform's derived TEL codecs expand to instances the capture checker sees as fresh
+  // capabilities where a pure instance is required, so their derivation sites must sit in an
+  // unchecked module. The client depends on it and only ever calls `encode`/`decode`.
+  object records extends Component(), Publishing:
+    def mvnDeps = Task(settings.recordsDeps(deps.soundness()))
+
+    override def scalacOptions =
+      (settings.scalaOptions ++ settings.predef).filterNot: option =>
+        option == "-Ycc-new" || option == "-language:experimental.captureChecking"
+
   // The command-line client library (`flair.runClient` and its helpers): reads the project's
   // configuration, drives the compiler over its sources, and renders what the engine finds. NOT
   // an assembled app: the `@main`/`externalize` entry point lives in the `launcher` module, so
   // this is a plain library released as `dev.propensive:flair-client`. Depends on `plugin`,
   // which becomes a `flair-plugin` POM dependency, and on the compiler it drives.
-  object client extends Component(plugin), Publishing:
+  object client extends Component(plugin, records), Publishing:
     def mvnDeps = Task:
       settings.clientDeps(deps.soundness()) ++ settings.pyrocosmDeps(deps.pyrocosm())
         :+ mvn"org.scala-lang:scala3-compiler_3:${settings.scalaVersion}"
@@ -492,7 +514,7 @@ object flair extends Project:
 // sync script (propensive/.github) reconstructs the ivy2 layout coursier resolves from, which is
 // how `make snapshot` publishes an unreleased build for a dependent repository to pin.
 object release extends Module:
-  def modules: Seq[PublishModule] = Seq(flair.plugin, flair.client)
+  def modules: Seq[PublishModule] = Seq(flair.plugin, flair.records, flair.client)
 
   private def withDescriptors(source: os.Path, target: os.Path, entries: Seq[(String, os.Path)])
   :   Unit =

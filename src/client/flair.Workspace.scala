@@ -50,6 +50,21 @@ import dysasymptotics.linearSize
 //     message  Casts bypass the type checker; prefer a pattern match
 //     severity error
 //
+//   model haiku                     # a model target for `flair assess`
+//     model      claude-haiku-4-5
+//     credential anthropic          # a name in Pyrocosm's credential cascade
+//     batch      20                 # candidates per request
+//
+//   rule plumbing                   # an assessment rule: a model judges each candidate
+//     assess    def                 # over method definitions
+//     model     haiku
+//     rubric    doc/standards/plumbing.md
+//     criterion S1 +2 single expression
+//     vocabulary .tt .s .show
+//     band      definite 10
+//     gate      ladder 2
+//     signal    local +2
+//
 //   profile default                 # what `flair` checks; `flair <name>` when there are several
 //     source src/**/*.scala         # globs relative to the project root (the `.pyrocosm` parent)
 //     exclude src/gen/**
@@ -68,6 +83,7 @@ import dysasymptotics.linearSize
 //         prefix unsafe
 //     enforce cast                  # a rule this profile checks, optionally at its own severity
 //       severity warn
+//     assess plumbing               # an assessment rule `flair assess` runs for this profile
 //
 // The plugin has no TEL parser, so a profile is rendered as `-P:flair:` options (`flair options`)
 // and read back through the plugin's own `Config.parse` — one parser, one meaning, for both the
@@ -91,6 +107,57 @@ object Workspace:
 
   case class Enforcement(rule: Text, severity: Optional[Text])
 
+  // One yes/no criterion the model answers per candidate, and its weight in the score.
+  case class Criterion(id: Text, weight: Int, text: Text)
+
+  // A named threshold on the total: `definite 10`, `likely 5`, `weak 0`; below the lowest,
+  // `legitimate`.
+  case class Band(name: Text, threshold: Int)
+
+  // A shape that admits a definition as a candidate, with its bound where one applies:
+  // `conversion`, `ladder 2`, `round-trip`, `adapter 3`, `verb 3`.
+  case class Admission(kind: Text, bound: Optional[Int])
+
+  // Points the driver adds for what it can see itself: `local +2`, `calls 1 +2`, `calls 4+ -1`,
+  // `duplicate +3`, `one-liner +1`.
+  case class Signal(kind: Text, value: Optional[Text], points: Int)
+
+  // A model target: which provider and model, the credential's name in the Pyrocosm cascade,
+  // and how requests are shaped.
+  case class Model
+    ( name:       Text,
+      provider:   Text,
+      model:      Text,
+      credential: Text,
+      batch:      Int,
+      limit:      Int,
+      mode:       Text )
+
+  // An assessment rule: what a model judges, against which rubric and criteria, over which
+  // definitions. Unlike a `Rule`, it never reaches the plugin.
+  case class Assessment
+    ( name:          Text,
+      unit:          Text,
+      model:         Text,
+      rubric:        Text,
+      criteria:      List[Criterion],
+      vocabulary:    List[Text],
+      bands:         List[Band],
+      lines:         Int,
+      kinds:         List[Text],
+      excludeNames:  List[Text],
+      excludeBodies: List[Text],
+      noUsing:       Boolean,
+      admissions:    List[Admission],
+      signals:       List[Signal],
+      predicates:    List[Predicate] ):
+
+    def weight(id: Text): Int = criteria.filter(_.id == id).prim.let(_.weight).or(0)
+
+    // The band a total falls in.
+    def band(total: Int): Text =
+      bands.filter(total >= _.threshold).prim.let(_.name).or(t"legitimate")
+
   case class Profile
     ( name:      Text,
       sources:   List[Text],
@@ -98,10 +165,20 @@ object Workspace:
       languages: List[Text],
       notes:     Optional[Text],
       style:     Optional[Style],
-      enforced:  List[Enforcement] )
+      enforced:  List[Enforcement],
+      assessed:  List[Text] )
 
-  case class Config(file: Text, root: Text, rules: List[Rule], profiles: List[Profile]):
+  case class Config
+    ( file:        Text,
+      root:        Text,
+      rules:       List[Rule],
+      profiles:    List[Profile],
+      models:      List[Model]      = Nil,
+      assessments: List[Assessment] = Nil ):
+
     def profile(name: Text): Optional[Profile] = profiles.filter(_.name == name).prim
+    def assessment(name: Text): Optional[Assessment] = assessments.filter(_.name == name).prim
+    def model(name: Text): Optional[Model] = models.filter(_.name == name).prim
 
     // A relative path in the file resolves against the project root.
     def absolute(entry: Text): Text = if entry.starts(t"/") then entry else t"$root/$entry"
@@ -202,8 +279,114 @@ object Workspace:
     var errors: List[Text] = Nil
     def fail(message: Text): Unit = errors = errors + List(message)
 
+    // A signed integer atom: `+2`, `-3`, `10`.
+    def signed(text: Text): Optional[Int] =
+      safely((if text.starts(t"+") then text.skip(1) else text).as[Int])
+
+    val models: List[Model] =
+      tel.fields(t"model").to[List].map: (node: Tel) =>
+        val name = node.primaryAtom
+        if name == t"" then fail(t"a model has no name")
+
+        val provider = atoms(node, t"provider").prim.or(t"anthropic")
+        if provider != t"anthropic" then fail(t"model `$name`: `$provider` is not a provider; only `anthropic` is")
+
+        val model = atoms(node, t"model").prim.or(t"")
+        if model == t"" then fail(t"model `$name` names no model")
+
+        val mode = atoms(node, t"mode").prim.or(t"batches")
+        if mode != t"batches" && mode != t"realtime" then fail(t"model `$name`: `$mode` is not a mode; expected `batches` or `realtime`")
+
+        Model
+          ( name, provider, model, atoms(node, t"credential").prim.or(provider),
+            int(node, t"batch").or(20), int(node, t"limit").or(4096), mode )
+
+    models.map(_.name).each: (name: Text) =>
+      if models.filter(_.name == name).size > 1 then fail(t"model `$name` is defined more than once")
+
+    val assessments: List[Assessment] =
+      tel.fields(t"rule").to[List].filter(_.field(t"assess").present).map: (node: Tel) =>
+        val name = node.primaryAtom
+        val kinds: List[Text] = List.from(Predicates.kinds.map(_.tt))
+
+        val known: List[Text] =
+          List(t"assess", t"model", t"rubric", t"criterion", t"vocabulary", t"band", t"lines",
+               t"kind", t"exclude-name", t"exclude-body", t"no-using", t"gate", t"signal")
+
+        node.childCompounds.to[List].map(_.keyword).each: (keyword: Text) =>
+          if !known.has(keyword) && !kinds.has(keyword) then
+            fail(t"rule `$name`: `$keyword` is not an assessment keyword")
+
+        val unit = atoms(node, t"assess").prim.or(t"def")
+        if unit != t"def" then fail(t"rule `$name`: `assess $unit` is not supported; only `assess def` is")
+
+        val model = atoms(node, t"model").prim.or(t"")
+        if model == t"" then fail(t"rule `$name` names no model")
+        else if models.filter(_.name == model).nil then fail(t"rule `$name` uses model `$model`, which is not defined")
+
+        val rubric = atoms(node, t"rubric").prim.or(t"")
+        if rubric == t"" then fail(t"rule `$name` names no rubric")
+
+        val criteria: List[Criterion] =
+          node.fields(t"criterion").to[List].bind: (c: Tel) =>
+            c.atomTexts.to[List].filter(_ != t"") match
+              case id :: weight :: rest =>
+                signed(weight).lay(Nil: List[Criterion]) { (w: Int) => List(Criterion(id, w, rest.join(t" "))) }
+                . also { if signed(weight).absent then fail(t"rule `$name`: criterion `$id` has no weight") }
+              case _ =>
+                fail(t"rule `$name`: a criterion needs an id and a weight")
+                Nil
+
+        criteria.map(_.id).each: (id: Text) =>
+          if criteria.filter(_.id == id).size > 1 then fail(t"rule `$name`: criterion `$id` is defined more than once")
+
+        if criteria.nil then fail(t"rule `$name` has no criteria")
+
+        val bands: List[Band] =
+          node.fields(t"band").to[List].bind: (b: Tel) =>
+            b.atomTexts.to[List].filter(_ != t"") match
+              case band :: threshold :: _ =>
+                signed(threshold).lay(Nil: List[Band]) { (n: Int) => List(Band(band, n)) }
+              case _ => Nil
+
+        bands.stdlib.sliding(2).foreach:
+          case scala.Seq(higher, lower) =>
+            if higher.threshold <= lower.threshold then fail(t"rule `$name`: bands must descend")
+          case _ => ()
+
+        val admissions: List[Admission] =
+          node.fields(t"gate").to[List].map: (g: Tel) =>
+            g.atomTexts.to[List].filter(_ != t"") match
+              case kind :: bound :: _ => Admission(kind, safely(bound.as[Int]))
+              case kind :: _          => Admission(kind, Unset)
+              case _                  => Admission(t"", Unset)
+
+        val signals: List[Signal] =
+          node.fields(t"signal").to[List].bind: (s: Tel) =>
+            s.atomTexts.to[List].filter(_ != t"") match
+              case kind :: points :: Nil =>
+                signed(points).lay(Nil: List[Signal]) { (p: Int) => List(Signal(kind, Unset, p)) }
+              case kind :: value :: points :: Nil =>
+                signed(points).lay(Nil: List[Signal]) { (p: Int) => List(Signal(kind, value, p)) }
+              case _ =>
+                fail(t"rule `$name`: a signal needs a kind and its points")
+                Nil
+
+        val predicates: List[Predicate] =
+          kinds.bind[List[Predicate], Predicate, List[Predicate]]: kind =>
+            node.fields(kind).to[List].map { (child: Tel) => Predicate(kind, phrase(child)) }
+
+        Assessment
+          ( name, unit, model, rubric, criteria,
+            node.fields(t"vocabulary").to[List].bind { (v: Tel) => v.atomTexts.to[List].filter(_ != t"") },
+            bands, int(node, t"lines").or(12),
+            node.fields(t"kind").to[List].bind { (k: Tel) => k.atomTexts.to[List].filter(_ != t"") },
+            node.fields(t"exclude-name").to[List].bind { (e: Tel) => e.atomTexts.to[List].filter(_ != t"") },
+            node.fields(t"exclude-body").to[List].bind { (e: Tel) => e.atomTexts.to[List].filter(_ != t"") },
+            node.field(t"no-using").present, admissions, signals, predicates )
+
     val rules: List[Rule] =
-      tel.fields(t"rule").to[List].map: (node: Tel) =>
+      tel.fields(t"rule").to[List].filter(_.field(t"assess").absent).map: (node: Tel) =>
         val name = node.primaryAtom
 
         val kinds: List[Text] = List.from(Predicates.kinds.map(_.tt))
@@ -227,8 +410,9 @@ object Workspace:
             node.field(t"message").let(phrase(_)),
             atoms(node, t"severity").prim )
 
-    rules.map(_.name).each: (name: Text) =>
-      if rules.filter(_.name == name).size > 1 then fail(t"rule `$name` is defined more than once")
+    (rules.map(_.name) + assessments.map(_.name)).each: (name: Text) =>
+      if (rules.filter(_.name == name).size + assessments.filter(_.name == name).size) > 1 then
+        fail(t"rule `$name` is defined more than once")
 
     val profiles: List[Profile] =
       tel.fields(t"profile").to[List].map: (node: Tel) =>
@@ -264,18 +448,23 @@ object Workspace:
             if rules.filter(_.name == rule).nil then fail(t"profile `$name` enforces `$rule`, which is not defined")
             Enforcement(rule, atoms(e, t"severity").prim)
 
+        val assessed: List[Text] = atoms(node, t"assess")
+
+        assessed.each: (rule: Text) =>
+          if assessments.filter(_.name == rule).nil then fail(t"profile `$name` assesses `$rule`, which is not an assessment rule")
+
         Profile
           ( name, sources, atoms(node, t"exclude"), atoms(node, t"language"),
-            atoms(node, t"notes").prim, style, enforced )
+            atoms(node, t"notes").prim, style, enforced, assessed )
 
     profiles.map(_.name).each: (name: Text) =>
       if profiles.filter(_.name == name).size > 1 then fail(t"profile `$name` is defined more than once")
 
     if profiles.nil then fail(t"no profile is defined")
 
-    if errors.nil then Outcome.Loaded(Config(file, root, rules, profiles))
+    if errors.nil then Outcome.Loaded(Config(file, root, rules, profiles, models, assessments))
     else Outcome.Invalid(file, errors)
 
   // Subcommand names, which a profile may not take: `flair <word>` must be unambiguous.
   val reserved: Set[Text] =
-    Set(t"check", t"metrics", t"options", t"rules", t"about", t"install", t"quit")
+    Set(t"check", t"metrics", t"options", t"rules", t"assess", t"serve", t"about", t"install", t"quit")

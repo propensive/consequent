@@ -36,6 +36,11 @@ import probably.*
 import fulminate.*
 
 object Tests extends Suite(m"Flair Tests"):
+  // The entry point fume's legacy run (a separate JVM, used when the suites' event schema is
+  // not the one fume was built against) and `java -cp <test jar> flair.Tests` both need: the
+  // same plain runner as `flair.runTests`, exiting with the suite's status.
+  def main(args: Array[String]): Unit = runTests()
+
   // The language features the standalone parser must enable, matching the
   // `-language` flags this module is compiled with. Without them the parse
   // differs from the compiler's — `relaxedLambdaSyntax` alone decides whether
@@ -131,6 +136,35 @@ object Tests extends Suite(m"Flair Tests"):
     . toList.map(_.rule)
 
   def parse(body: String): Parsing.Parsed = Parsing.parse("<test>", stub(body), features)
+
+  val plumbingFixture: String =
+    List
+      ( "object Tels:",
+        "  private inline def kebab(s: String): Text = Text(s)",
+        "  private def normalise(text: Text): Text = text.s.replace(\"a\", \"b\").nn.tt",
+        "  def monthName(month: Mensual): Text = month.toString.tt",
+        "  def toJulianDay(year: Int, day: Int): Int =",
+        "    val base = year - 474",
+        "    val cycle = base/2820",
+        "    val rest = base%2820",
+        "    rest*365 + cycle*1029983 + day",
+        "  def parseHeader(text: Text): Header = Header(text)",
+        "  private def typeKindToFrame(kind: TypeKind): Frame = kind match",
+        "    case TypeKind.BOOLEAN => Frame.Z",
+        "    case TypeKind.BYTE    => Frame.B",
+        "    case TypeKind.VOID    => panic(m\"void\")",
+        "  def process(text: Text): Text =",
+        "    def bytes(text: Text): Data = Array.unsafeFrozen(text.s.getBytes(UTF_8).nn)",
+        "    bytes(text).show",
+        "  def withUsing(text: Text)(using Diagnostics): Text = text.s.tt",
+        "  given Conversion[Int, Expression] = int => Number(int.toDouble)",
+        "  override def toString: String = t\"x\".s",
+        "  def tag(out: Scribe[Byte], char: Char): Unit = out.append(char.toByte)",
+        "",
+        "object Other:",
+        "  def tag(sink: Scribe[Byte], c: Char): Unit = sink.append(c.toByte)",
+        "" )
+    . mkString("\n")
 
   def extractedExtensions(body: String): List[String] =
     val parsed = parse(body)
@@ -1696,3 +1730,56 @@ object Tests extends Suite(m"Flair Tests"):
       test(m"Every rule is a parser rule"):
         Rules.lastPhase(Rules.enabled(counted.copy(enforced = Map("casts" -> None))))
       . assert(_ == "parser")
+
+    suite(m"Candidates: definitions put to a model"):
+      val plumbing: String = plumbingFixture
+
+      def candidates(body: String): List[Candidates.Candidate] =
+        val parsed = parse(body)
+        Candidates.collect("<test>", stub(body), parsed.tree, parsed.source, Candidates.Filters())
+
+      val found = candidates(plumbing)
+
+      test(m"The gated definitions are collected and the rest are not"):
+        found.map(_.name).sorted
+      . assert(_ == List("bytes", "conversion", "kebab", "monthName",
+                         "normalise", "tag", "tag", "typeKindToFrame"))
+
+      test(m"Kinds are read from modifiers and nesting"):
+        found.map(c => c.name -> c.kind.word).toMap
+      . assert(_ == Map("bytes" -> "local", "conversion" -> "conversion",
+                        "kebab" -> "private", "monthName" -> "public", "normalise" -> "private",
+                        "tag" -> "public", "typeKindToFrame" -> "private"))
+
+      test(m"A locus is the owner chain and the signature as written"):
+        found.find(_.name == "kebab").map(_.locus)
+      . assert(_ == Some("<test> ▸ Tels.kebab(s: String): Text"))
+
+      test(m"A local def's locus descends through its enclosing def"):
+        found.find(_.name == "bytes").map(_.locus)
+      . assert(_ == Some("<test> ▸ Tels.process(text)/bytes(text: Text): Data"))
+
+      test(m"Lines are display-only: a locus survives lines inserted above"):
+        val shifted = candidates("// a comment\n\n\n" + plumbing)
+        (shifted.map(_.locus), shifted.map(_.normalised), shifted.map(_.line) != found.map(_.line))
+      . assert(_ == (found.map(_.locus), found.map(_.normalised), true))
+
+      test(m"A rename keeps the normalised text"):
+        val renamed = candidates(plumbing.replace("def kebab(s: String)", "def dashed(text: String)").replace("Text(s)", "Text(text)"))
+        renamed.find(_.name == "dashed").map(_.normalised)
+      . assert(_ == found.find(_.name == "kebab").map(_.normalised))
+
+      test(m"Verbatim twins with different parameter names are duplicates"):
+        val twins = Candidates.duplicates(found)
+        found.filter(_.name == "tag").map(c => twins(c.normalised))
+      . assert(_ == List(1, 1))
+
+      test(m"Call sites are counted within the definition's scope"):
+        found.map(c => c.name -> c.calls).toMap.filter((n, _) => n == "bytes" || n == "monthName")
+      . assert(_ == Map("bytes" -> 1, "monthName" -> 0))
+
+      test(m"One-liners and body lengths are measured"):
+        found.map(c => c.name -> (c.oneLiner, c.bodyLines)).toMap
+      . assert(_ == Map("bytes" -> (true, 1), "conversion" -> (true, 1),
+                        "kebab" -> (true, 1), "monthName" -> (true, 1), "normalise" -> (true, 1),
+                        "tag" -> (true, 1), "typeKindToFrame" -> (true, 4)))
