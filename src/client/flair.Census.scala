@@ -218,9 +218,16 @@ class Repository(val toplevel: Text, val gitDir: Text):
 
   private def ref(namespace: Text): Path on Git.Refs = unsafely(Git.Refs.notes(namespace))
 
+  // octogenarian validates a notes namespace as one ref segment, so a hierarchical namespace
+  // (`flair-assess/plumbing`) goes to `git` directly, as the other operations it has no word
+  // for do.
+  private def nested(namespace: Text): Boolean = namespace.contains(t"/")
+
   // A note, if the object has one under the namespace.
   def note(namespace: Text, hash: Text)(using WorkingDirectory): Optional[Text] =
-    safely(repo.notes.show(Git.Hash(hash), ref(namespace)))
+    if nested(namespace)
+    then safely(sh"git -C $toplevel notes --ref $namespace show $hash".exec[Text]())
+    else safely(repo.notes.show(Git.Hash(hash), ref(namespace)))
 
   // A note read through the notes ref's own tree, which is where it survives the pruning of a
   // dangling target: `git notes` fans out its tree past a size, so both layouts are tried.
@@ -232,10 +239,17 @@ class Repository(val toplevel: Text, val gitDir: Text):
       . or(safely(sh"git -C $toplevel cat-file -p $fanned".exec[Text]()))
 
   def addNote(namespace: Text, hash: Text, body: Text, force: Boolean)(using WorkingDirectory): Boolean =
-    safely(repo.notes.add(Git.Hash(hash), body, force, ref(namespace))).present
+    if nested(namespace) then
+      val flag: Text = if force then t"-f" else t"--no-force"
+      safely(sh"git -C $toplevel notes --ref $namespace add $flag -m $body $hash".exec[Exit]())
+      . lay(false)(_ == Exit.Ok)
+    else safely(repo.notes.add(Git.Hash(hash), body, force, ref(namespace))).present
 
   def appendNote(namespace: Text, hash: Text, body: Text)(using WorkingDirectory): Boolean =
-    safely(repo.notes.append(Git.Hash(hash), body, ref(namespace))).present
+    if nested(namespace) then
+      safely(sh"git -C $toplevel notes --ref $namespace append -m $body $hash".exec[Exit]())
+      . lay(false)(_ == Exit.Ok)
+    else safely(repo.notes.append(Git.Hash(hash), body, ref(namespace))).present
 
   // Writes `data` into the object store as a blob and returns its hash: how a definition's
   // normalised text becomes its digest, and how a binary note body is staged.

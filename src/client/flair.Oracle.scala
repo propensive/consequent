@@ -138,9 +138,11 @@ object Oracle:
     :   List[Outcome] =
 
       batches.map: (batch: List[Candidates.Candidate]) =>
+        // Both arms ascribed to the union: `recover` types the handler by the block, and an
+        // unascribed block would make it `Answer`, casting the error at runtime.
         val result: Answer | Llm.Error =
           recover:
-            case error: Llm.Error => error
+            case error: Llm.Error => (error: Answer | Llm.Error)
 
           . protect:
               given jsonTactic0: (Tactic[Json.Error]^) = jsonTactic
@@ -148,7 +150,7 @@ object Oracle:
               target.session:
                 val answer = llm.elicit[Answer](prompt(batch, digests, criteria))
                 usage0 = usage0 + llm.usage
-                answer
+                (answer: Answer | Llm.Error)
 
         Outcome(batch, result)
 
@@ -156,7 +158,7 @@ object Oracle:
     :   List[Outcome] =
 
       recover:
-        case error: Llm.Error => batches.map(Outcome(_, error))
+        case error: Llm.Error => (batches.map(Outcome(_, error)): List[Outcome])
 
       . protect:
           given jsonTactic0: (Tactic[Json.Error]^) = jsonTactic
@@ -177,3 +179,4 @@ object Oracle:
                 Llm.Error(Llm.Error.Reason.Malformed, t"the batch returned no outcome for $id")
 
             Outcome(batch, result)
+          . pipe { (list: List[Outcome]) => list }
