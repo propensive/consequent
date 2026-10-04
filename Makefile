@@ -45,14 +45,14 @@ flair.jar: assembly
 	cp out/flair/launcher/assembly.dest/out.jar flair.jar
 	java -cp flair.jar soundness.repackage --github propensive/flair,propensive/pyrocosm,propensive/soundness,propensive/proscala
 
-# Package the repackaged JAR as a native executable for this machine with the pinned `xeq` builder
-# script (fetched into dist/xeq and verified against etc/xeq.tsv).
-flair: flair.jar xeq-fetch
-	dist/xeq build --jar flair.jar --out flair
+# Package the repackaged JAR as a native executable for this machine with the pinned `xek` builder
+# (fetched into dist/xek and verified against etc/xek.tsv).
+flair: flair.jar xek-fetch
+	dist/xek flair.jar flair
 
-# Fetch the pinned `xeq` builder script into dist/xeq.
-xeq-fetch:
-	./etc/shared xeq-fetch.sh
+# Fetch the pinned `xek` builder into dist/xek.
+xek-fetch:
+	./etc/shared xek-fetch.sh
 
 install: flair
 	cp flair ${HOME}/.local/bin/
@@ -109,4 +109,4 @@ snapshot-prune:
 dev:
 	./mill -w flair.client.compile
 
-.PHONY: check xeq-fetch sync-deps tools snapshot snapshot-prune assembly release publishLocal run test test-plain dev install
+.PHONY: check xek-fetch sync-deps tools snapshot snapshot-prune assembly release publishLocal run test test-plain dev install
