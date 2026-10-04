@@ -54,7 +54,7 @@ object Frontend:
   case class Result(units: List[Parsed], diagnostics: List[Diagnostic])
 
   // The classpath the compiler initialises against: the jars the running application was loaded
-  // from. Under the Burdock/xeq launcher those are the externalized dependency jars fetched into
+  // from. Under the Burdock/xek launcher those are the externalized dependency jars fetched into
   // `~/.cache/burdock` plus the executable itself — a shebang-prefixed file with no `.jar` suffix
   // that the compiler refuses to read (a `ZipFile` still reads the appended archive past the
   // shebang), so it is symlinked to a `.jar` path and the symlink substituted. Outside the

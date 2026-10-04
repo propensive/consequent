@@ -38,7 +38,7 @@ Then it publishes in two ordered steps: first the two library jars, exactly as `
 produces them, so that GitHub records the digests Burdock hashed at compile time; then — once
 those digests are indexed — the launcher is assembled and repackaged against them, the script
 verifies that both libraries externalized to this release's URLs, and it uploads one executable
-per platform (cross-built from one machine with the pinned `xeq` builder), the `flair`
+per platform (cross-built from one machine with the pinned `xek` builder), the `flair`
 bootstrap script, and the generated `install.sh` that `https://propensive.dev/flair` redirects
 to. A draft is not used, and cannot be: a draft's asset URLs live under an `untagged-…` path
 that changes on publication, which would bake dead URLs into the executables.
