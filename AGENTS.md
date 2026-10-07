@@ -9,7 +9,7 @@ Flair compiles against Soundness and Pyrocosm, both pinned in `etc/refs`. Soundn
 pins `flair-plugin` the same way, so a change to the plugin that Soundness needs before the next
 flair release is published to it with `make snapshot`, which stages `flair-plugin` and
 `flair-client`, uploads them as a `snapshot-<hex>` pre-release, and prints the line for
-Soundness's `etc/refs`. Flair's own version, `flairVersion` in `build.mill`, is not a pin.
+Soundness's `etc/refs`. Flair's own version is its release tag alone.
 
 `etc/refs` is tab-separated, one upstream per line: `repository`, `version`, and for a snapshot
 the `commit` it was built from. A version `X.Y.Z` is a GitHub Release. A version
@@ -49,7 +49,8 @@ A release is cut by tagging, and by nothing else:
 git tag -s X.Y.Z && git push --tags
 ```
 
-Bump `flairVersion` in `build.mill` and merge that first; the tag then fires
+The tag is the only place the version is declared: tag a commit on `main` once CI has passed
+on it, and the tag fires
 `.github/workflows/release.yml`, which runs the shared `release.sh` in
 propensive/.github. Never publish by hand, and never create a release or
 upload an asset with `gh`: the script exists so that every release is made the same way.
