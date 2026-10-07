@@ -46,9 +46,9 @@ flair.jar: assembly
 	java -cp flair.jar soundness.repackage --github propensive/flair,propensive/pyrocosm,propensive/soundness,propensive/proscala
 
 # Package the repackaged JAR as a native executable for this machine with the pinned `xek` builder
-# (fetched into dist/xek and verified against etc/xek.tsv).
+# (fetched into dist/xek and verified against etc/xek.tsv), requiring Java 25 as releases do.
 flair: flair.jar xek-fetch
-	dist/xek flair.jar flair
+	dist/xek build --java-min 25 --java 25 flair.jar flair
 
 # Fetch the pinned `xek` builder into dist/xek.
 xek-fetch:
