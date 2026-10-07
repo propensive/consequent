@@ -172,7 +172,7 @@ def runClient(): Unit =
         case _                                => ()
 
       // Whether the client is a terminal, which is what decides whether a run shows its progress.
-      val tty: Boolean = summon[DaemonService[?]].cliInput == ethereal.Terminus.Terminal
+      val tty: Boolean = summon[Resident].cliInput == ethereal.Terminus.Terminal
 
       arguments match
         // `flair serve [--port]` — serve the dashboard: every known project's profiles, a

@@ -35,6 +35,7 @@ package flair
 import soundness.*
 
 import codepages.utf8Codepage
+import environments.javaBaseEnvironment
 import logging.silentLogging
 import gitCommands.searchpathGitCommand
 
