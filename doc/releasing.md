@@ -15,10 +15,10 @@ Publishing runs in GitHub Actions, through the shared scripts in
 
 ## Releasing
 
-Bump `flairVersion` in `build.mill` to the version being released and merge it: the release
-refuses to run when the pin disagrees with the tag, because the launcher resolves
-`flair-client` at that version and Burdock externalizes a library only when the released jar's
-bytes are the ones on the launcher's classpath. Then, once CI is green on that commit:
+The tag is the only place the version is declared. The release builds the libraries at the
+tag's version, and the launcher resolves `flair-client` at that same version, since Burdock
+externalizes a library only when the released jar's bytes are the ones on the launcher's
+classpath. Once CI is green on the commit to release:
 
 ```sh
 git tag -s X.Y.Z && git push --tags
@@ -30,7 +30,7 @@ releases with. What flair needs beyond the common path is the five lines in `etc
 
 Nothing is published until every gate has passed: the tag must be signed and verified by
 GitHub; CI must *already* be green on that exact commit, so the release does not re-run the
-suite; `flairVersion` must equal the tag; and `deps.py check` must find every pin, transitively,
+suite; and `deps.py check` must find every pin, transitively,
 a published release. If a later step fails, the release **and** the tag are deleted from origin,
 so a retry is `git tag -d X.Y.Z && git tag -s X.Y.Z && git push --tags`.
 
