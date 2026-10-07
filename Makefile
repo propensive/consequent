@@ -48,7 +48,7 @@ flair.jar: assembly
 # Package the repackaged JAR as a native executable for this machine with the pinned `xek` builder
 # (fetched into dist/xek and verified against etc/xek.tsv).
 flair: flair.jar xek-fetch
-	dist/xek flair.jar flair
+	dist/xek build flair.jar flair
 
 # Fetch the pinned `xek` builder into dist/xek.
 xek-fetch:
