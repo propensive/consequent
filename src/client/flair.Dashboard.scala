@@ -37,7 +37,7 @@ import java.util.concurrent as juc
 import soundness.*
 import dysasymptotics.linearSize
 
-import pyrocosm.{Action, Block, Control, Event, Hints, Inline, Interface, Live, Panel, Tone, Tool, hints}
+import pyrocosm.{Action, Activity, Block, Control, Event, Hints, Inline, Interface, Live, Panel, Tone, Tool, hints}
 import pyrocosm.Status as Gauge
 
 // The dashboard as the web front-end `Tool` serves from the daemon: launched once, for as long
@@ -147,7 +147,6 @@ final class Dashboard():
 
   val navigation: Live[List[Block]] = Live(Nil)
   val findings: Live[List[Block]] = Live(List(Block.paragraph(t"Choose a profile and press Check.")))
-  val status: Live[List[Block]] = Live(Nil)
   val summary: Live[List[Block]] = Live(Nil)
   val enabled: Live[Boolean] = Live(true)
 
@@ -157,7 +156,6 @@ final class Dashboard():
         List
           ( Panel(Panel.Id(t"profiles"), Panel.Role.Navigation, Inline.text(t"Profiles"), navigation, Panel.Priority.Important),
             Panel(Panel.Id(t"findings"), Panel.Role.Primary, Unset, findings, Panel.Priority.Essential, hints = Hints(hints.Follow)),
-            Panel(Panel.Id(t"status"), Panel.Role.Status, Unset, status, Panel.Priority.Important),
             Panel(Panel.Id(t"summary"), Panel.Role.Primary, Inline.text(t"Summary"), summary, Panel.Priority.Important) ),
         controls = List(Control.Button(Inline.text(t"Check"), checkAction, enabled)) )
 
@@ -233,15 +231,21 @@ final class Dashboard():
   private def failure(message: Text): List[Block] =
     List(Block.Paragraph(List(Inline.Toned(Tone.Failure, Inline.text(message)))))
 
+  // The check in flight, as the interface's one activity: its gauge, captioned by the stage.
+  private def progress(target: Target, gauge: Gauge, caption: Text): Unit =
+    interface.activities() =
+      List(Activity(t"check", Inline.text(t"Checking ${target.profile}"), gauge, state = Inline.text(caption)))
+
   // Checks the profile, the findings scrolling into the primary panel as they are found under
-  // a gauge in the status panel, then shows the whole outcome. The configuration is reloaded
-  // for the check, so an edit since the project was registered is honoured.
+  // a gauge in the masthead, then shows the whole outcome at the head of the findings. The
+  // configuration is reloaded for the check, so an edit since the project was registered is
+  // honoured.
   private def check(target: Target): Unit =
     running = true
     enabled() = false
     filter = Unset
     findings() = Nil
-    status() = List(Block.Gauge(Gauge.Indeterminate(), Inline.text(t"Starting")))
+    progress(target, Gauge.Indeterminate(), t"Starting")
 
     try
       Workspace.load(target.root) match
@@ -253,7 +257,7 @@ final class Dashboard():
               val plugin = config.pluginConfig(profile)
 
               if !plugin.errors.nil then
-                status() =
+                findings() =
                   List(Block.Notice(Tone.Failure, Inline.text(t"Profile `${profile.name}` could not be used"),
                       plugin.errors.map(Block.paragraph)))
               else
@@ -261,7 +265,7 @@ final class Dashboard():
 
                 val sink: Checking.Sink = new Checking.Sink:
                   def aborted: Boolean = false
-                  def gauge(status0: Gauge, caption: Text): Unit = status() = List(Block.Gauge(status0, Inline.text(caption)))
+                  def gauge(status0: Gauge, caption: Text): Unit = progress(target, status0, caption)
 
                   def found(finding: Report.Finding, text: Text): Unit =
                     findings.append(Report.excerpt(config.root, finding, text))
@@ -269,29 +273,30 @@ final class Dashboard():
                 val outcome = Checking.run(profile, plugin.config, files, sink)
                 checked = Checked(config, profile, outcome, java.lang.System.currentTimeMillis)
                 showFindings()
-                showStatus()
 
             case _ =>
-              status() = failure(t"The profile `${target.profile}` is no longer defined in ${target.root}")
+              findings() = failure(t"The profile `${target.profile}` is no longer defined in ${target.root}")
 
         case Workspace.Outcome.Missing =>
-          status() = failure(t"No .pyrocosm/flair/config.tel was found at ${target.root}")
+          findings() = failure(t"No .pyrocosm/flair/config.tel was found at ${target.root}")
 
         case Workspace.Outcome.Invalid(file, errors) =>
-          status() = List(Block.Notice(Tone.Failure, Inline.text(t"$file could not be used"), errors.map(Block.paragraph)))
+          findings() = List(Block.Notice(Tone.Failure, Inline.text(t"$file could not be used"), errors.map(Block.paragraph)))
     catch case error: Exception =>
-      status() = failure(t"The check failed: ${Optional(error.getMessage).let(_.tt).or(error.getClass.getName.nn.tt)}")
+      findings() = failure(t"The check failed: ${Optional(error.getMessage).let(_.tt).or(error.getClass.getName.nn.tt)}")
     finally
+      interface.activities() = Nil
       running = false
       enabled() = true
 
-  // The findings of the latest check, every one or those under the filtering rule.
+  // The findings of the latest check, every one or those under the filtering rule, headed by
+  // the outcome in a line: how many findings, in how many files, of which profile, when.
   private def showFindings(): Unit = checked.let: (last: Checked) =>
     val texts: Map[Text, Text] = last.outcome.texts
     val all: List[Report.Finding] = last.outcome.all
     val shown: List[Report.Finding] = filter.lay(all) { (rule: Text) => all.filter(_.rule == rule) }
 
-    findings() =
+    val listed: List[Block] =
       if !shown.nil then
         shown.map { (finding: Report.Finding) => Report.excerpt(last.config.root, finding, texts.at(finding.path).or(t"")) }
       else
@@ -300,22 +305,21 @@ final class Dashboard():
 
         List(Block.Paragraph(List(Inline.Toned(Tone.Success, Inline.text(message)))))
 
-  // The outcome in a line: how many findings, in how many files, of which profile, when.
-  private def showStatus(): Unit = checked.let: (last: Checked) =>
+    findings() = outcome(last) :: listed
+
+  private def outcome(last: Checked): Block =
     val all: List[Report.Finding] = last.outcome.all
     val tone: Tone = if last.outcome.errors then Tone.Failure else if all.nil then Tone.Success else Tone.Warning
     val verdict: Text = if all.nil then t"No violations" else if last.outcome.errors then t"Errors" else t"Warnings"
 
-    status() =
-      List
-        ( Block.Paragraph
-            ( List
-                ( Inline.Toned(tone, Inline.text(verdict)),
-                  Inline.Textual(t"  "),
-                  Inline.Figure(all.size.toDouble, 0),
-                  Inline.Textual(t" findings in "),
-                  Inline.Figure(last.outcome.files.toDouble, 0),
-                  Inline.Textual(t" files · ${last.profile.name} · ${when(last.finished)}") ) ) )
+    Block.Paragraph
+      ( List
+          ( Inline.Toned(tone, Inline.text(verdict)),
+            Inline.Textual(t"  "),
+            Inline.Figure(all.size.toDouble, 0),
+            Inline.Textual(t" findings in "),
+            Inline.Figure(last.outcome.files.toDouble, 0),
+            Inline.Textual(t" files · ${last.profile.name} · ${when(last.finished)}") ) )
 
   private def history(target: Target): List[Census.Record] =
     given WorkingDirectory = () => target.root
